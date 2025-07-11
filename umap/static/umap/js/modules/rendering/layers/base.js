@@ -7,10 +7,19 @@ export const LayerMixin = {
 
   onInit: function (leafletMap) {
     leafletMap.on('zoomend', this.onZoomEnd, this)
+    if (this.datalayer.hasDynamicData()) {
+      this._dynamicInterval = setInterval(() => {
+        if (this.datalayer.showAtZoom()) this.datalayer.fetchRemoteData()
+      }, 1000)
+    }
   },
 
   onDelete: function (leafletMap) {
     leafletMap.off('zoomend', this.onZoomEnd, this)
+    if (this._dynamicInterval) {
+      clearInterval(this._dynamicInterval)
+      this._dynamicInterval = null
+    }
   },
 
   onAdd: function (leafletMap) {
