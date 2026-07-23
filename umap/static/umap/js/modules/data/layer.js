@@ -364,6 +364,8 @@ export class DataLayer {
 
   async fetchRemoteData(force) {
     if (!this.isRemoteLayer()) return
+    // A subscription (ws://) is fed by the socket, not by pulling.
+    if (this.isRemoteSubscription()) return
     if (!this.hasDynamicData() && this.isLoaded() && !force) return
     if (!this.isVisible()) return
     // Keep non proxied url for later use in Alert.
@@ -372,22 +374,68 @@ export class DataLayer {
     if (this.properties.remoteData.proxy) {
       url = this._umap.proxyUrl(url, this.properties.remoteData.ttl)
     }
-    return await this.getUrl(url, remoteUrl).then((raw) => {
-      this.clear(false)
-      this.dataChanged()
-      return this._umap.formatter
-        .parse(raw, this.properties.remoteData.format)
-        .then((geojson) => this.fromGeoJSON(geojson, false))
-        .catch((error) => {
-          console.debug(error)
-          Alert.error(
-            translate('Cannot parse remote data for layer "{layer}" with url "{url}"', {
-              layer: this.getName(),
-              url: remoteUrl,
-            })
-          )
-        })
+    return await this.getUrl(url, remoteUrl).then((raw) => this._loadRemoteData(raw))
+  }
+
+  // Parse a raw remote payload and (re)load it into the layer.
+  // Shared by the HTTP fetch and the WebSocket subscription.
+  async _loadRemoteData(raw) {
+    const remoteUrl = this._umap.renderUrl(this.properties.remoteData.url)
+    this.clear(false)
+    this.dataChanged()
+    return this._umap.formatter
+      .parse(raw, this.properties.remoteData.format)
+      .then((geojson) => this.fromGeoJSON(geojson, false))
+      .catch((error) => {
+        console.debug(error)
+        Alert.error(
+          translate('Cannot parse remote data for layer "{layer}" with url "{url}"', {
+            layer: this.getName(),
+            url: remoteUrl,
+          })
+        )
+      })
+  }
+
+  // A dynamic remote layer whose url is a ws:// or wss:// endpoint is fed by
+  // a live WebSocket subscription instead of being polled over HTTP.
+  isRemoteSubscription() {
+    return (
+      this.hasDynamicData() && /^wss?:\/\//i.test(this.properties.remoteData?.url || '')
+    )
+  }
+
+  subscribeRemoteData() {
+    if (!this.isRemoteSubscription()) return
+    this._remoteSocketClosed = false
+    this._openRemoteSocket()
+  }
+
+  _openRemoteSocket() {
+    const url = this._umap.renderUrl(this.properties.remoteData.url)
+    const socket = new WebSocket(url)
+    this._remoteSocket = socket
+    socket.addEventListener('message', (event) => {
+      this._loadRemoteData(event.data)
     })
+    socket.addEventListener('error', () => socket.close())
+    socket.addEventListener('close', () => {
+      if (this._remoteSocket !== socket || this._remoteSocketClosed) return
+      // Reconnect with a small delay so a flapping server doesn't spin.
+      this._remoteReconnectTimer = setTimeout(() => this._openRemoteSocket(), 3000)
+    })
+  }
+
+  unsubscribeRemoteData() {
+    this._remoteSocketClosed = true
+    if (this._remoteReconnectTimer) {
+      clearTimeout(this._remoteReconnectTimer)
+      this._remoteReconnectTimer = null
+    }
+    if (this._remoteSocket) {
+      this._remoteSocket.close()
+      this._remoteSocket = null
+    }
   }
 
   isLoaded() {

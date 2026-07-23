@@ -8,9 +8,15 @@ export const LayerMixin = {
   onInit: function (leafletMap) {
     leafletMap.on('zoomend', this.onZoomEnd, this)
     if (this.datalayer.hasDynamicData()) {
-      this._dynamicInterval = setInterval(() => {
-        if (this.datalayer.showAtZoom()) this.datalayer.fetchRemoteData()
-      }, 1000)
+      if (this.datalayer.isRemoteSubscription()) {
+        // ws:// or wss:// url: the server pushes updates over a socket.
+        this.datalayer.subscribeRemoteData()
+      } else {
+        // http(s):// url: poll for fresh data on a timer.
+        this._dynamicInterval = setInterval(() => {
+          if (this.datalayer.showAtZoom()) this.datalayer.fetchRemoteData()
+        }, 1000)
+      }
     }
   },
 
@@ -20,6 +26,7 @@ export const LayerMixin = {
       clearInterval(this._dynamicInterval)
       this._dynamicInterval = null
     }
+    this.datalayer.unsubscribeRemoteData()
   },
 
   onAdd: function (leafletMap) {
